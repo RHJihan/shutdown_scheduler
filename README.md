@@ -80,14 +80,40 @@ Open the settings window from the tray icon to set:
 ## Building a standalone executable
 
 A [PyInstaller](https://pyinstaller.org/) spec file (`ShutdownScheduler.spec`) is
-included to build a windowed (no-console) executable:
+included to build a windowed (no-console) executable.
+
+### One-folder build (recommended)
+
+The included spec uses `COLLECT`, which produces a **one-folder** build: a
+directory containing `ShutdownScheduler.exe` alongside its dependencies. This
+starts faster than a one-file build and is the default:
 
 ```bash
 pip install pyinstaller
 pyinstaller ShutdownScheduler.spec
 ```
 
-The bundled app is written to `dist/ShutdownScheduler/`.
+The bundled app is written to `dist/ShutdownScheduler/`. Run it via
+`dist/ShutdownScheduler/ShutdownScheduler.exe`, and distribute the whole
+`ShutdownScheduler` folder (the `.exe` needs the sibling files to run).
+
+If you prefer to build straight from `main.py` without the spec file, the
+equivalent one-folder command is:
+
+```bash
+pyinstaller --windowed --onedir --name ShutdownScheduler main.py
+```
+
+(`--onedir` is PyInstaller's default, so it can be omitted.)
+
+### One-file build (single .exe)
+
+To instead produce a single self-contained `dist/ShutdownScheduler.exe` (slower
+to start, since it unpacks to a temp dir on each launch):
+
+```bash
+pyinstaller --windowed --onefile --name ShutdownScheduler main.py
+```
 
 ## Project structure
 
