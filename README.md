@@ -6,9 +6,18 @@ you can cancel or extend the countdown.
 
 ## Features
 
-- **Daily scheduled shutdown** at a configurable time (24-hour `HH:MM`).
-- **System-tray control** — runs quietly in the background; right-click the tray
-  icon to open settings, toggle the schedule on/off, or quit.
+- **Native Windows 11 look** — a genuine Fluent / WinUI 3 interface built on
+  PySide6 + QFluentWidgets: Mica backdrops, rounded setting cards, real toggle
+  switches, and a Fluent tray flyout. It **automatically follows the OS
+  light/dark theme** and picks up your **Windows accent color**.
+- **Daily scheduled shutdown** at a configurable time, picked in a familiar
+  **12-hour clock with AM/PM**.
+- **Start with Windows** — an in-app toggle that registers the app to launch
+  (minimized to the tray) at sign-in, via the per-user registry `Run` key (no
+  administrator rights required).
+- **System-tray control** — runs quietly in the background; the tray flyout
+  shows the next scheduled shutdown and lets you open settings or quit
+  (left-click the icon to open settings directly).
 - **Pre-shutdown warning dialog** with a live countdown and one-click
   **Cancel** or **Extend** actions.
 - **Master enable/disable toggle** so you can arm or disarm the schedule without
@@ -29,16 +38,18 @@ The app starts hidden and lives entirely in the system tray:
 - Shutdown is performed via Windows' `shutdown /s /f /t 0`, which forces a clean
   immediate shutdown.
 
-All Tk UI work happens on the main thread; the scheduler and tray run on their
-own daemon threads and marshal UI updates back via `root.after(...)`.
+All Qt UI work happens on the main thread. The scheduler runs on its own daemon
+thread and marshals UI updates back to the GUI thread via queued Qt signals; the
+tray icon lives on the GUI thread.
 
 ## Requirements
 
 - Windows
 - Python 3.10+
 - Dependencies (see `requirements.txt`):
-  - [`pystray`](https://pypi.org/project/pystray/) — system-tray icon
-  - [`Pillow`](https://pypi.org/project/Pillow/) — tray icon rendering
+  - [`PySide6`](https://pypi.org/project/PySide6/) — Qt 6 GUI toolkit
+  - [`PySide6-Fluent-Widgets`](https://pypi.org/project/PySide6-Fluent-Widgets/) —
+    Fluent / WinUI 3 widgets, theming, and the system-tray flyout
 
 ## Installation
 
@@ -70,12 +81,16 @@ pythonw main.py --minimized
 
 Open the settings window from the tray icon to set:
 
-| Setting            | Default | Description                                       |
-| ------------------ | ------- | ------------------------------------------------- |
-| Enable schedule    | off     | Master toggle to arm/disarm scheduled shutdown.   |
-| Shutdown time      | 17:30   | Daily shutdown time in 24-hour format.            |
-| Warning minutes    | 5       | How long before shutdown the warning appears.     |
-| Extension minutes  | 10      | How long the "Extend" button pushes shutdown back.|
+| Setting            | Default  | Description                                       |
+| ------------------ | -------- | ------------------------------------------------- |
+| Enable schedule    | off      | Master toggle to arm/disarm scheduled shutdown.   |
+| Start with Windows | off      | Launch the app (in the tray) automatically at sign-in. |
+| Shutdown time      | 5:30 PM  | Daily shutdown time (12-hour clock with AM/PM).   |
+| Warning minutes    | 5        | How long before shutdown the warning appears (1–60).   |
+| Extension minutes  | 10       | How long the "Extend" button pushes shutdown back (1–180).|
+
+The shutdown time is shown in the UI on a 12-hour clock; it is stored
+internally in 24-hour form so the configuration file stays unambiguous.
 
 ## Building a standalone executable
 
@@ -97,11 +112,14 @@ The bundled app is written to `dist/ShutdownScheduler/`. Run it via
 `dist/ShutdownScheduler/ShutdownScheduler.exe`, and distribute the whole
 `ShutdownScheduler` folder (the `.exe` needs the sibling files to run).
 
-If you prefer to build straight from `main.py` without the spec file, the
-equivalent one-folder command is:
+Using the spec file is recommended because it collects the QFluentWidgets and
+qframelesswindow data files (stylesheets, icons, fonts) the themed UI needs at
+runtime. If you build straight from `main.py`, pass those collection flags
+yourself:
 
 ```bash
-pyinstaller --windowed --onedir --name ShutdownScheduler main.py
+pyinstaller --windowed --onedir --name ShutdownScheduler \
+  --collect-all qfluentwidgets --collect-all qframelesswindow main.py
 ```
 
 (`--onedir` is PyInstaller's default, so it can be omitted.)
@@ -112,7 +130,8 @@ To instead produce a single self-contained `dist/ShutdownScheduler.exe` (slower
 to start, since it unpacks to a temp dir on each launch):
 
 ```bash
-pyinstaller --windowed --onefile --name ShutdownScheduler main.py
+pyinstaller --windowed --onefile --name ShutdownScheduler \
+  --collect-all qfluentwidgets --collect-all qframelesswindow main.py
 ```
 
 ## Project structure
@@ -126,10 +145,13 @@ shutdown_scheduler/
     config.py                    Settings model + atomic JSON persistence
     scheduler.py                 Background tick loop / shutdown timing logic
     shutdown_service.py          Windows shutdown.exe wrapper
-    tray.py                      System-tray icon and menu
-    ui.py                        Settings window
-    notification.py              Pre-shutdown warning dialog
-    icon.py                      Tray icon rendering
+    autostart.py                 Launch-at-sign-in via the registry Run key
+    theme.py                     Fluent theming, accent color + OS light/dark following
+    timefmt.py                   12-hour ⇄ 24-hour time conversion helpers
+    tray.py                      System-tray icon and Fluent flyout menu
+    ui.py                        Settings window (Fluent)
+    notification.py              Pre-shutdown warning dialog (Fluent)
+    icon.py                      Tray / window icon rendering (Qt)
 ```
 
 ## License

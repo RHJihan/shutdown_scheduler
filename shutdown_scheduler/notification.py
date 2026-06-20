@@ -1,96 +1,136 @@
 # SPDX-License-Identifier: GPL-3.0-only
 # Copyright (C) 2026 Md. Rifat Hasan Jihan
 
+"""Imminent-shutdown warning — a focused, always-on-top Fluent dialog.
+
+Shows a live countdown plus Cancel / Extend actions. Built on the same
+``FluentWidget`` base as the settings page so it shares the native Windows 11
+look and correct light/dark theming. Closing it via the title bar takes no
+action; the shutdown proceeds as scheduled.
+"""
 from __future__ import annotations
 
-import tkinter as tk
 from datetime import datetime
-from tkinter import ttk
 from typing import Callable, Optional
 
+from PySide6.QtCore import Qt, QTimer
+from PySide6.QtGui import QColor
+from PySide6.QtWidgets import QHBoxLayout, QVBoxLayout
 
-class WarningDialog:
-    """Modal warning dialog. Buttons fire callbacks; X button takes no action
-    (shutdown will proceed as scheduled). Auto-updates a live countdown."""
+from qfluentwidgets import (
+    BodyLabel,
+    CaptionLabel,
+    DisplayLabel,
+    FluentIcon as FIF,
+    IconWidget,
+    InfoBarIcon,
+    PrimaryPushButton,
+    PushButton,
+    SubtitleLabel,
+)
+from qfluentwidgets.window.fluent_window import FluentWidget
+
+from .icon import app_icon
+from .timefmt import format_12h
+
+_TITLE_BAR_H = 48
+_MUTED_LIGHT = QColor(0, 0, 0, 150)
+_MUTED_DARK = QColor(255, 255, 255, 150)
+
+
+class WarningDialog(FluentWidget):
+    """Always-on-top warning with a live countdown."""
 
     def __init__(
         self,
-        root: tk.Tk,
         shutdown_at: datetime,
         extension_minutes: int,
         on_cancel: Callable[[], None],
         on_extend: Callable[[], None],
     ) -> None:
-        self._root = root
+        super().__init__()
         self._shutdown_at = shutdown_at
+        self._extension_minutes = extension_minutes
         self._on_cancel = on_cancel
         self._on_extend = on_extend
-        self._extension_minutes = extension_minutes
-        self._top: Optional[tk.Toplevel] = None
-        self._countdown_var: Optional[tk.StringVar] = None
-        self._after_id: Optional[str] = None
 
-    def show(self) -> None:
-        if self._top is not None and tk.Toplevel.winfo_exists(self._top):
-            self._top.lift()
-            return
+        self.setWindowTitle("Shutdown imminent")
+        self.setWindowIcon(app_icon())
+        self.setFixedWidth(400)
+        self.setWindowFlag(Qt.WindowStaysOnTopHint, True)
+        self.titleBar.minBtn.hide()
+        self.titleBar.maxBtn.hide()
 
-        top = tk.Toplevel(self._root)
-        top.title("Shutdown Imminent")
-        top.resizable(False, False)
-        top.attributes("-topmost", True)
-        top.protocol("WM_DELETE_WINDOW", self._close)
+        # Clean solid Fluent surface (no Mica wallpaper bleed-through).
+        self.setMicaEffectEnabled(False)
+        self.setCustomBackgroundColor(QColor(243, 243, 243), QColor(32, 32, 32))
 
-        frame = ttk.Frame(top, padding=20)
-        frame.grid(row=0, column=0)
+        self._build_ui()
+        self.resize(self.sizeHint())
 
-        ttk.Label(
-            frame,
-            text="Your PC will shut down soon.",
-            font=("Segoe UI", 11, "bold"),
-        ).grid(row=0, column=0, columnspan=2, sticky="w")
+        self._timer = QTimer(self)
+        self._timer.setInterval(1000)
+        self._timer.timeout.connect(self._tick)
 
-        self._countdown_var = tk.StringVar()
-        ttk.Label(frame, textvariable=self._countdown_var, font=("Segoe UI", 10)).grid(
-            row=1, column=0, columnspan=2, sticky="w", pady=(6, 14)
-        )
-
-        ttk.Button(frame, text="Cancel shutdown", command=self._cancel).grid(
-            row=2, column=0, padx=(0, 8), sticky="ew"
-        )
-        ttk.Button(
-            frame,
-            text=f"Extend {self._extension_minutes} min",
-            command=self._extend,
-        ).grid(row=2, column=1, sticky="ew")
-
-        frame.columnconfigure(0, weight=1)
-        frame.columnconfigure(1, weight=1)
-
-        self._top = top
-        self._center(top)
+    def show_dialog(self) -> None:
         self._tick()
+        self._center()
+        self.show()
+        self.raise_()
+        self.activateWindow()
+        self._timer.start()
 
-    def _center(self, top: tk.Toplevel) -> None:
-        top.update_idletasks()
-        w, h = top.winfo_width(), top.winfo_height()
-        sw, sh = top.winfo_screenwidth(), top.winfo_screenheight()
-        top.geometry(f"+{(sw - w) // 2}+{(sh - h) // 3}")
+    # ---------- construction ----------
+
+    def _build_ui(self) -> None:
+        body = QVBoxLayout(self)
+        body.setContentsMargins(28, _TITLE_BAR_H + 12, 28, 28)
+        body.setSpacing(0)
+
+        heading = QHBoxLayout()
+        heading.setSpacing(12)
+        warn = IconWidget(InfoBarIcon.WARNING, self)
+        warn.setFixedSize(24, 24)
+        heading.addWidget(warn, 0, Qt.AlignVCenter)
+        heading.addWidget(
+            SubtitleLabel("Your PC will shut down soon"), 1, Qt.AlignVCenter
+        )
+        body.addLayout(heading)
+
+        self._detail = CaptionLabel(
+            f"Scheduled for "
+            f"{format_12h(self._shutdown_at.hour, self._shutdown_at.minute)}."
+        )
+        self._detail.setTextColor(_MUTED_LIGHT, _MUTED_DARK)
+        body.addSpacing(6)
+        body.addWidget(self._detail)
+
+        self._countdown = DisplayLabel("00:00")
+        body.addSpacing(14)
+        body.addWidget(self._countdown, 0, Qt.AlignHCenter)
+        body.addSpacing(22)
+
+        buttons = QHBoxLayout()
+        buttons.setSpacing(10)
+        cancel = PushButton("Cancel shutdown")
+        cancel.clicked.connect(self._cancel)
+        extend = PrimaryPushButton(
+            FIF.HISTORY, f"Extend {self._extension_minutes} min"
+        )
+        extend.clicked.connect(self._extend)
+        buttons.addWidget(cancel, 1)
+        buttons.addWidget(extend, 1)
+        body.addLayout(buttons)
+
+    # ---------- behavior ----------
 
     def _tick(self) -> None:
-        if self._top is None or self._countdown_var is None:
-            return
         remaining = self._shutdown_at - datetime.now()
         secs = max(0, int(remaining.total_seconds()))
         m, s = divmod(secs, 60)
-        self._countdown_var.set(
-            f"Shutdown scheduled at {self._shutdown_at.strftime('%H:%M')} "
-            f"— {m:02d}:{s:02d} remaining."
-        )
+        self._countdown.setText(f"{m:02d}:{s:02d}")
         if secs <= 0:
             self._close()
-            return
-        self._after_id = self._top.after(1000, self._tick)
 
     def _cancel(self) -> None:
         self._close()
@@ -101,14 +141,22 @@ class WarningDialog:
         self._on_extend()
 
     def _close(self) -> None:
-        if self._after_id and self._top:
-            try:
-                self._top.after_cancel(self._after_id)
-            except tk.TclError:
-                pass
-        if self._top is not None:
-            try:
-                self._top.destroy()
-            except tk.TclError:
-                pass
-        self._top = None
+        self._timer.stop()
+        self.close()
+        self.deleteLater()
+
+    def _center(self) -> None:
+        handle = self.windowHandle()
+        screen = self.screen() or (handle.screen() if handle else None)
+        if screen is None:
+            return
+        geo = screen.availableGeometry()
+        size = self.sizeHint()
+        x = geo.x() + (geo.width() - size.width()) // 2
+        y = geo.y() + (geo.height() - size.height()) // 3
+        self.move(x, y)
+
+    def closeEvent(self, e) -> None:
+        # X = take no action; shutdown proceeds as scheduled.
+        self._timer.stop()
+        super().closeEvent(e)

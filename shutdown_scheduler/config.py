@@ -26,6 +26,7 @@ class Settings:
     shutdown_minute: int = 30
     warning_minutes: int = 5
     extension_minutes: int = 10
+    start_with_windows: bool = False
 
     def with_changes(self, **changes) -> "Settings":
         return replace(self, **changes)

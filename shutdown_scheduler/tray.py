@@ -1,91 +1,94 @@
 # SPDX-License-Identifier: GPL-3.0-only
 # Copyright (C) 2026 Md. Rifat Hasan Jihan
 
+"""System tray icon with a modern Fluent flyout menu.
+
+Uses Qt's ``QSystemTrayIcon`` for the notification-area icon and QFluentWidgets'
+``SystemTrayMenu`` for the right-click flyout, so the menu gets rounded corners,
+Fluent icons, hover states and automatic light/dark theming — matching the rest
+of the app. Lives entirely on the GUI thread.
+"""
 from __future__ import annotations
 
-import threading
 from typing import Callable, Optional
 
-import pystray
-from pystray import MenuItem
+from PySide6.QtCore import QObject
+from PySide6.QtWidgets import QSystemTrayIcon
+
+from qfluentwidgets import Action, FluentIcon as FIF, SystemTrayMenu
 
 from .config import APP_NAME, Settings
-from .icon import create_tray_image
+from .icon import create_icon
 
 
-class TrayController:
-    """System tray icon. Runs pystray on its own thread so the main thread is
-    free for tkinter's mainloop."""
+class TrayController(QObject):
+    """The notification-area icon and its Fluent context menu."""
 
     def __init__(
         self,
         settings_provider: Callable[[], Settings],
         on_open_settings: Callable[[], None],
-        on_toggle_enabled: Callable[[], None],
         on_quit: Callable[[], None],
         status_provider: Callable[[], str],
+        parent: Optional[QObject] = None,
     ) -> None:
+        super().__init__(parent)
         self._get_settings = settings_provider
         self._on_open = on_open_settings
-        self._on_toggle = on_toggle_enabled
         self._on_quit = on_quit
         self._status = status_provider
-        self._icon: Optional[pystray.Icon] = None
-        self._thread: Optional[threading.Thread] = None
+
+        self._tray = QSystemTrayIcon(self)
+        self._tray.setIcon(create_icon(self._get_settings().enabled))
+        self._tray.setToolTip(self._tooltip())
+        self._tray.activated.connect(self._on_activated)
+        self._tray.setContextMenu(self._build_menu())
 
     def start(self) -> None:
-        self._icon = pystray.Icon(
-            APP_NAME,
-            icon=create_tray_image(self._get_settings().enabled),
-            title=self._tooltip(),
-            menu=self._build_menu(),
-        )
-        self._thread = threading.Thread(target=self._icon.run, name="tray", daemon=True)
-        self._thread.start()
+        self._tray.show()
 
     def stop(self) -> None:
-        if self._icon is not None:
-            try:
-                self._icon.stop()
-            except Exception:
-                pass
+        self._tray.hide()
 
     def refresh(self) -> None:
-        """Re-render icon, tooltip, and menu (call after settings/status change)."""
-        if self._icon is None:
-            return
-        try:
-            self._icon.icon = create_tray_image(self._get_settings().enabled)
-            self._icon.title = self._tooltip()
-            self._icon.menu = self._build_menu()
-            self._icon.update_menu()
-        except Exception:
-            pass
+        """Re-render icon, tooltip and menu after a settings/status change."""
+        self._tray.setIcon(create_icon(self._get_settings().enabled))
+        self._tray.setToolTip(self._tooltip())
+        # Rebuild the menu so the status line reflects new state.
+        old = self._tray.contextMenu()
+        self._tray.setContextMenu(self._build_menu())
+        if old is not None:
+            old.deleteLater()
 
-    # ---------- menu wiring ----------
+    # ---------- menu ----------
 
-    def _build_menu(self) -> pystray.Menu:
-        return pystray.Menu(
-            MenuItem("Open Settings", self._handle_open, default=True),
-            MenuItem(
-                "Enabled",
-                self._handle_toggle,
-                checked=lambda _item: self._get_settings().enabled,
-            ),
-            pystray.Menu.SEPARATOR,
-            MenuItem(lambda _item: self._status(), None, enabled=False),
-            pystray.Menu.SEPARATOR,
-            MenuItem("Quit", self._handle_quit),
-        )
+    def _build_menu(self) -> SystemTrayMenu:
+        menu = SystemTrayMenu()
+
+        open_action = Action(FIF.SETTING, "Open settings", self)
+        open_action.triggered.connect(lambda: self._on_open())
+        menu.addAction(open_action)
+
+        menu.addSeparator()
+
+        status_action = Action(self._status(), self)
+        status_action.setEnabled(False)
+        menu.addAction(status_action)
+
+        menu.addSeparator()
+
+        quit_action = Action(FIF.CLOSE, "Quit", self)
+        quit_action.triggered.connect(lambda: self._on_quit())
+        menu.addAction(quit_action)
+
+        return menu
 
     def _tooltip(self) -> str:
         return f"{APP_NAME} — {self._status()}"
 
-    def _handle_open(self, _icon, _item) -> None:
-        self._on_open()
-
-    def _handle_toggle(self, _icon, _item) -> None:
-        self._on_toggle()
-
-    def _handle_quit(self, _icon, _item) -> None:
-        self._on_quit()
+    def _on_activated(self, reason: QSystemTrayIcon.ActivationReason) -> None:
+        if reason in (
+            QSystemTrayIcon.ActivationReason.Trigger,
+            QSystemTrayIcon.ActivationReason.DoubleClick,
+        ):
+            self._on_open()
